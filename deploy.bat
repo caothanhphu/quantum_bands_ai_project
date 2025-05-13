@@ -1,52 +1,42 @@
-@echo off
-SETLOCAL ENABLEDELAYEDEXPANSION
+@echo OFF
+ECHO Starting CI/CD Deployment Process...
 
-REM Script để build Docker image, dừng/xóa container cũ và chạy container mới.
-REM Sử dụng các biến môi trường được truyền từ GitHub Actions workflow cho các cấu hình nhạy cảm.
-
-REM Tham số đầu vào:
-REM %1: Tên cơ sở của Docker image (ví dụ: myfastapiapp)
-REM %2: Tag cụ thể cho Docker image (ví dụ: commit SHA)
-
-REM Kiểm tra các tham số đầu vào
-IF "%~1"=="" (
-    ECHO Loi: Ten co so cua image (tham so 1) la bat buoc.
-    EXIT /B 1
-)
-IF "%~2"=="" (
-    ECHO Loi: Tag cu the cho image (tham so 2) la bat buoc.
+REM Bước 1: Kiểm tra Docker (Tùy chọn, vì workflow đã có thể làm)
+ECHO Verifying Docker installation...
+docker --version
+IF %ERRORLEVEL% NEQ 0 (
+    ECHO Docker command failed. Exiting.
     EXIT /B 1
 )
 
-SET BASE_IMAGE_NAME=%1
-SET SPECIFIC_TAG=%2
-SET LATEST_TAG=latest
-SET CONTAINER_NAME=%BASE_IMAGE_NAME%-container
-
-ECHO =========== BUOC 1: BUILD DOCKER IMAGE ===========
-ECHO Dang build Docker image: %BASE_IMAGE_NAME%:%SPECIFIC_TAG% va %BASE_IMAGE_NAME%:%LATEST_TAG%
-docker build -t %BASE_IMAGE_NAME%:%SPECIFIC_TAG% -t %BASE_IMAGE_NAME%:%LATEST_TAG% .
-IF ERRORLEVEL 1 (
-    ECHO Build Docker image THAT BAI!
-    EXIT /B %ERRORLEVEL%
+REM Bước 2: Build Docker image
+ECHO Building Docker image...
+docker build --no-cache --progress=plain -t quantumbands-fastapi-image -f Dockerfile .
+IF %ERRORLEVEL% NEQ 0 (
+    ECHO Docker build failed. Exiting.
+    EXIT /B 1
 )
-ECHO Build Docker image THANH CONG.
-ECHO.
 
-ECHO =========== BUOC 2: CAP NHAT DOCKER CONTAINER ===========
-ECHO Dang dung container hien tai (neu co): %CONTAINER_NAME%
-docker stop %CONTAINER_NAME% > nul 2>&1
-ECHO Dang xoa container hien tai (neu co): %CONTAINER_NAME%
-docker rm %CONTAINER_NAME% > nul 2>&1
-ECHO Container cu da duoc dung va xoa (bo qua loi neu khong tim thay).
-ECHO.
+REM Bước 3: Dừng và xóa container cũ
+ECHO Stopping and Removing existing container...
+SET "containerName=quantumbands-fastapi-container"
+FOR /F "tokens=*" %%i IN ('docker ps -a -q --filter "name=%containerName%"') DO (
+    ECHO Stopping and removing existing container: %containerName% (%%i)
+    docker stop %containerName%
+    docker rm %containerName%
+)
+IF NOT ERRORLEVEL 1 (
+    ECHO No existing container named %containerName% found or it was successfully removed.
+)
 
-ECHO Dang chay container moi: %CONTAINER_NAME% tu image %BASE_IMAGE_NAME%:%SPECIFIC_TAG%
-REM Cac bien moi truong nhu DB_SERVER, DB_USER, PROJECT_NAME, v.v.
-REM duoc mong doi la da duoc thiet lap trong moi truong cua shell
-REM boi buoc 'env:' trong GitHub Actions workflow.
 
-docker run -d --name %CONTAINER_NAME% -p 6020:8000 --restart always ^
+REM Bước 4: Chạy container mới
+ECHO Running new Docker container...
+REM Các biến môi trường DB_PASSWORD và JWT_SECRET sẽ được truyền từ GitHub Actions workflow
+REM và được runner thiết lập thành biến môi trường cho tiến trình chạy file batch này.
+docker run -d --restart always ^
+    -p 6020:8080 ^
+    --name %containerName% ^
     -e PROJECT_NAME="%PROJECT_NAME%" ^
     -e PROJECT_VERSION="%PROJECT_VERSION%" ^
     -e LOG_LEVEL="%LOG_LEVEL%" ^
@@ -56,14 +46,13 @@ docker run -d --name %CONTAINER_NAME% -p 6020:8000 --restart always ^
     -e DB_PASSWORD="%DB_PASSWORD%" ^
     -e DB_NAME="%DB_NAME%" ^
     -e DB_DRIVER="%DB_DRIVER%" ^
-    %BASE_IMAGE_NAME%:%SPECIFIC_TAG%
+    quantumbands-fastapi-image
 
-IF ERRORLEVEL 1 (
-    ECHO Chay container moi THAT BAI!
-    EXIT /B %ERRORLEVEL%
+IF %ERRORLEVEL% NEQ 0 (
+    ECHO Failed to run new Docker container. Exiting.
+    EXIT /B 1
 )
-ECHO Container moi %CONTAINER_NAME% da khoi dong thanh cong voi image %BASE_IMAGE_NAME%:%SPECIFIC_TAG%.
-ECHO.
 
-ECHO =========== HOAN TAT DEPLOYMENT ===========
+ECHO New container '%containerName%' started. Access it on host at http://localhost:6020
+ECHO Deployment process completed successfully.
 EXIT /B 0

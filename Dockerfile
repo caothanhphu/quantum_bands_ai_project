@@ -14,53 +14,87 @@ ENV POETRY_VIRTUALENVS_CREATE="false"
 # Thêm thư mục bin của Poetry vào PATH
 ENV PATH="$POETRY_HOME/bin:$PATH"
 
-# Cài đặt các gói hệ thống cần thiết và Poetry
-# curl dùng để tải script cài đặt Poetry
-# unixodbc-dev cần cho pyodbc (nếu kết nối MSSQL từ container Linux)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    gnupg \
-    apt-transport-https \
-    unixodbc-dev \
-    && curl -sSL https://install.python-poetry.org | python3 - \
-    # Cài đặt Microsoft ODBC Driver cho SQL Server (cho container Linux)
-    # Script này dành cho Debian (base image python:*-slim thường là Debian)
-    && curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
-    && curl https://packages.microsoft.com/config/debian/$(cat /etc/debian_version | cut -d'.' -f1)/prod.list > /etc/apt/sources.list.d/mssql-release.list \
-    && apt-get update \
-    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 mssql-tools18 \
-    # Dọn dẹp để giảm kích thước image
-    && apt-get remove --purge -y curl gnupg apt-transport-https \
-    && apt-get autoremove -y \
-    && apt-get clean \
+# --- CÀI ĐẶT CÁC GÓI HỆ THỐNG VÀ DEPENDENCIES ---
+
+# Bước 1: Cập nhật apt và cài đặt các công cụ cơ bản + prerequisites cho Poetry và ODBC
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        gnupg \
+        apt-transport-https \
+        unixodbc-dev \
     && rm -rf /var/lib/apt/lists/*
+RUN echo "BUOC 1 HOAN TAT: Cong cu co ban va unixodbc-dev da duoc cai dat."
 
-# Kiểm tra phiên bản Poetry (tùy chọn)
-# RUN poetry --version
+# Bước 2: Cài đặt Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 -
+RUN echo "BUOC 2 HOAN TAT: Poetry da duoc cai dat."
 
-# Đặt thư mục làm việc trong container
+# Bước 3: Thiết lập Microsoft repository để cài đặt ODBC driver
+# Cách này sử dụng gói .deb của Microsoft để cấu hình repository, thường ổn định hơn.
+RUN export DEBIAN_VERSION_MAJOR=$(cat /etc/debian_version 2>/dev/null | cut -d'.' -f1 || echo "unknown") && \
+    echo "Phien ban Debian duoc phat hien: $DEBIAN_VERSION_MAJOR" && \
+    if [ "$DEBIAN_VERSION_MAJOR" = "unknown" ] || ! curl --output /dev/null --silent --head --fail "https://packages.microsoft.com/config/debian/${DEBIAN_VERSION_MAJOR}/packages-microsoft-prod.deb"; then \
+        echo "Khong tim thay package config cua Microsoft cho phien ban Debian $DEBIAN_VERSION_MAJOR. Kiem tra https://learn.microsoft.com/en-us/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server de biet cac phien ban duoc ho tro." ; \
+        # Nếu muốn build vẫn tiếp tục mà không có ODBC, bạn có thể bỏ exit 1 và xử lý sau.
+        # Tuy nhiên, nếu ODBC là bắt buộc, thì nên dừng lại ở đây.
+        # exit 1; # Bỏ comment dòng này nếu muốn build dừng hẳn khi không có driver.
+        # Tạm thời cho phép build tiếp tục để các bước khác có thể chạy, nhưng sẽ cảnh báo.
+        echo "CANH BAO: Khong the cau hinh Microsoft ODBC repository. Cac buoc cai dat driver ODBC co the se that bai." ; \
+    else \
+        curl -L -o packages-microsoft-prod.deb "https://packages.microsoft.com/config/debian/${DEBIAN_VERSION_MAJOR}/packages-microsoft-prod.deb" && \
+        dpkg -i packages-microsoft-prod.deb && \
+        rm packages-microsoft-prod.deb ; \
+    fi
+RUN echo "BUOC 3 HOAN TAT: Microsoft repository da duoc cau hinh (hoac da bo qua neu khong tuong thich)."
+
+# Bước 4: Cập nhật apt-get lại (RẤT QUAN TRỌNG sau khi thêm repo mới) và cài đặt Microsoft ODBC driver & tools
+# Bước này có thể thất bại nếu Bước 3 không cấu hình được repo của Microsoft.
+RUN apt-get update && \
+    # ACCEPT_EULA=Y là cần thiết để tự động chấp nhận thỏa thuận người dùng của Microsoft
+    ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
+        msodbcsql17 \
+        mssql-tools17 \
+    || echo "CANH BAO: Cai dat msodbcsql17 hoac mssql-tools17 that bai. Co the do Microsoft repository khong duoc them dung cach o buoc truoc, hoac goi khong co san cho phien ban OS nay." \
+    && rm -rf /var/lib/apt/lists/*
+RUN echo "BUOC 4 HOAN TAT: Microsoft ODBC Driver (msodbcsql17) va tools da duoc cai dat (hoac da co canh bao neu that bai)."
+
+# >>> THÊM BƯỚC DEBUG NÀY VÀO NẾU CHƯA CÓ <<<
+RUN echo "--- Thong tin Debug Driver ODBC ---" && \
+    echo "1. Kiem tra cau hinh unixODBC (odbcinst -j):" && \
+    (odbcinst -j || echo "Lenh odbcinst -j that bai hoac khong tim thay.") && \
+    echo "---" && \
+    echo "2. Noi dung file /etc/odbcinst.ini (neu ton tai):" && \
+    (cat /etc/odbcinst.ini 2>/dev/null || echo "/etc/odbcinst.ini khong tim thay hoac khong doc duoc.") && \
+    echo "---" && \
+    echo "3. Liet ke cac driver da dang ky voi odbcinst (odbcinst -q -d):" && \
+    (odbcinst -q -d || echo "Lenh odbcinst -q -d that bai.") && \
+    echo "---" && \
+    echo "4. Tim kiem file thu vien libmsodbcsql-17:" && \
+    (find /opt /usr -name "libmsodbcsql-17.*" 2>/dev/null || echo "Khong tim thay file libmsodbcsql-17 nao.") && \
+    echo "--- Ket thuc Thong tin Debug Driver ODBC ---"
+RUN echo "BUOC DEBUG ODBC HOAN TAT."
+# >>> KẾT THÚC BƯỚC DEBUG <<<
+
+# Bước 5: (Tùy chọn nhưng khuyến nghị) Thêm ODBC tools vào PATH
+ENV PATH="${PATH}:/opt/mssql-tools17/bin"
+RUN echo "BUOC 5 HOAN TAT: ODBC tools da duoc them vao PATH."
+
+# Bước 6: Dọn dẹp các gói không cần thiết cuối cùng
+RUN apt-get autoremove -y && \
+    apt-get clean
+RUN echo "BUOC 6 HOAN TAT: He thong da duoc don dep."
+
+# --- CÀI ĐẶT ỨNG DỤNG PYTHON ---
 WORKDIR /app
 
-# Sao chép file cấu hình của Poetry
-# Quan trọng: Sao chép những file này trước để tận dụng Docker layer caching.
-# Nếu chỉ code thay đổi mà dependencies không đổi, Docker sẽ không cần cài lại dependencies.
 COPY poetry.lock pyproject.toml ./
 
-# Cài đặt dependencies của dự án bằng Poetry
-# --no-dev: không cài các dependency chỉ dành cho môi trường phát triển
-# --no-interaction: không yêu cầu tương tác người dùng
-# --no-ansi: không dùng màu mè ANSI trong output
-RUN poetry install --no-dev --no-interaction --no-ansi
+RUN poetry install --no-root --no-interaction --no-ansi
+RUN echo "Cac dependency cua ung dung da duoc cai dat."
 
-# Sao chép toàn bộ code của ứng dụng (thư mục app và các file khác nếu có)
 COPY ./app /app/app
-# Ví dụ nếu bạn có file .env.example muốn đưa vào image:
-# COPY .env.example /app/.env.example
 
-# Expose port mà ứng dụng FastAPI sẽ chạy
 EXPOSE 8000
 
-# Lệnh để chạy ứng dụng khi container khởi động
-# Lệnh này giả định uvicorn là một dependency trong pyproject.toml
-# và có thể được chạy trực tiếp.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
