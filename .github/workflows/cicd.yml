@@ -1,4 +1,4 @@
-name: CI/CD Docker Build and Deploy on Self-Hosted Runner (Poetry)
+name: CI/CD Docker Build and Deploy via BAT on Self-Hosted Runner
 
 on:
   push:
@@ -7,50 +7,50 @@ on:
 
 jobs:
   build-and-deploy:
-    # Đảm bảo labels này khớp với self-hosted runner của bạn!
-    runs-on: [self-hosted, windows] # Thêm các label khác nếu cần
+    runs-on: [self-hosted, windows] # Đảm bảo runner của bạn có các label này
+
+    # Thiết lập các biến môi trường ở cấp độ job.
+    # Các biến này sẽ có sẵn cho tất cả các 'run' steps bên dưới,
+    # bao gồm cả môi trường mà deploy.bat được thực thi.
+    # Giá trị được lấy từ GitHub Secrets.
+    env:
+      # Sử dụng tên PROJECT_NAME_FROM_SECRET để tránh xung đột nếu PROJECT_NAME cũng được dùng làm tên image/container
+      PROJECT_NAME_FROM_SECRET: ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}
+      LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
+      DB_SERVER: ${{ secrets.DB_SERVER }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_DRIVER: ${{ secrets.DB_DRIVER }}
+      # PROJECT_VERSION sẽ được thiết lập động hơn ở step dưới
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        # Điều này đảm bảo file deploy.bat và Dockerfile có sẵn cho runner
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        # Vẫn nên có bước này để đảm bảo môi trường build Docker là tối ưu,
+        # ngay cả khi lệnh build thực tế nằm trong file .bat
 
-      - name: Define Docker image name and tags
-        id: docker_meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}
-          tags: |
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Get current commit short SHA
+        id: vars # Đặt ID cho step này để tham chiếu output
+        # Sử dụng PowerShell để lấy SHA và đặt output, hoạt động tốt trên Windows runner
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
+        shell: pwsh
 
-      - name: Build Docker image (using updated Dockerfile with Poetry)
-        run: |
-          docker build -t ${{ steps.docker_meta.outputs.tags }} .
-        # Dockerfile của bạn giờ đã hỗ trợ Poetry và Python 3.13
-
-      - name: Stop and Remove existing container (if any)
-        run: |
-          docker stop ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}-container -ErrorAction SilentlyContinue
-          docker rm ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}-container -ErrorAction SilentlyContinue
-
-      - name: Run new Docker container
-        run: |
-          docker run -d `
-            --name ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}-container `
-            -p 6020:8000 `
-            --restart always `
-            -e PROJECT_NAME="${{ secrets.PROJECT_NAME }}" `
-            -e PROJECT_VERSION="${{ steps.docker_meta.outputs.version }}" `
-            -e LOG_LEVEL="${{ secrets.LOG_LEVEL }}" `
-            -e DB_SERVER="${{ secrets.DB_SERVER }}" `
-            -e DB_PORT="${{ secrets.DB_PORT }}" `
-            -e DB_USER="${{ secrets.DB_USER }}" `
-            -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}" `
-            -e DB_NAME="${{ secrets.DB_NAME }}" `
-            -e DB_DRIVER="${{ secrets.DB_DRIVER }}" `
-            # Thêm các biến môi trường khác từ secrets nếu cần
-            # Chạy image với tag cụ thể (ví dụ theo SHA) hoặc tag 'latest'
-            ${{ steps.docker_meta.outputs.tags_first_on_new_line }}
+      - name: Execute deployment batch script
+        # Gọi file deploy.bat và truyền tham số
+        # Tham số 1: Tên cơ sở của image (lấy từ biến môi trường của job)
+        # Tham số 2: Tag cụ thể (commit SHA ngắn)
+        run: call deploy.bat "%PROJECT_NAME_FROM_SECRET%" "${{ steps.vars.outputs.sha_short }}"
+        shell: cmd # Chỉ định rõ ràng sử dụng cmd.exe để chạy file .bat
+        env:
+          # Các biến môi trường này sẽ được thiết lập CỤ THỂ cho bước này
+          # và sẽ được file deploy.bat sử dụng bên trong lệnh 'docker run -e ...'
+          # Chúng ghi đè hoặc bổ sung các biến đã có từ job-level 'env' nếu trùng tên.
+          PROJECT_NAME: ${{ env.PROJECT_NAME_FROM_SECRET }} # Sử dụng lại giá trị từ job env
+          PROJECT_VERSION: ${{ steps.vars.outputs.sha_short }} # Commit SHA sẽ là version
+          # Các biến DB_* khác sẽ được kế thừa từ job-level 'env' block.
