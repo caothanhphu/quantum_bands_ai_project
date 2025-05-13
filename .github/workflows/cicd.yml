@@ -39,7 +39,7 @@ jobs:
         id: vars # Đặt ID cho step này để tham chiếu output
         # Sử dụng PowerShell để lấy SHA và đặt output, hoạt động tốt trên Windows runner
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
-        shell: cmd
+        shell: powershell
 
       - name: Execute deployment batch script
         # Gọi file deploy.bat và truyền tham số
