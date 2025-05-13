@@ -5,9 +5,9 @@ set LOG_LEVEL=INFO
 set DB_SERVER=host.docker.internal
 set DB_PORT=1433
 set DB_USER=finix
-set DB_PASSWORD=YourStrongPasswordHere_123!
+set DB_PASSWORD=YourStrongP@sswordHere_123!
 set DB_NAME=FinixAI
-set DB_DRIVER=ODBC Driver 17 for SQL Server
+set DB_DRIVER=ODBC Driver 18 for SQL Server
 
 echo.
 echo Bat dau chay deploy.bat...

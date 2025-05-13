@@ -22,7 +22,7 @@ RUN apt-get update && \
         curl \
         gnupg \
         apt-transport-https \
-        unixodbc-dev \
+        unixodbc-dev \  
     && rm -rf /var/lib/apt/lists/*
 RUN echo "BUOC 1 HOAN TAT: Cong cu co ban va unixodbc-dev da duoc cai dat."
 
@@ -31,33 +31,32 @@ RUN curl -sSL https://install.python-poetry.org | python3 -
 RUN echo "BUOC 2 HOAN TAT: Poetry da duoc cai dat."
 
 # Bước 3: Thiết lập Microsoft repository để cài đặt ODBC driver
-# Cách này sử dụng gói .deb của Microsoft để cấu hình repository, thường ổn định hơn.
-RUN export DEBIAN_VERSION_MAJOR=$(cat /etc/debian_version 2>/dev/null | cut -d'.' -f1 || echo "unknown") && \
+RUN set -e && \
+    export DEBIAN_VERSION_MAJOR=$(cat /etc/debian_version 2>/dev/null | cut -d'.' -f1 || echo "unknown") && \
     echo "Phien ban Debian duoc phat hien: $DEBIAN_VERSION_MAJOR" && \
     if [ "$DEBIAN_VERSION_MAJOR" = "unknown" ] || ! curl --output /dev/null --silent --head --fail "https://packages.microsoft.com/config/debian/${DEBIAN_VERSION_MAJOR}/packages-microsoft-prod.deb"; then \
-        echo "Khong tim thay package config cua Microsoft cho phien ban Debian $DEBIAN_VERSION_MAJOR. Kiem tra https://learn.microsoft.com/en-us/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server de biet cac phien ban duoc ho tro." ; \
-        # Nếu muốn build vẫn tiếp tục mà không có ODBC, bạn có thể bỏ exit 1 và xử lý sau.
-        # Tuy nhiên, nếu ODBC là bắt buộc, thì nên dừng lại ở đây.
-        # exit 1; # Bỏ comment dòng này nếu muốn build dừng hẳn khi không có driver.
-        # Tạm thời cho phép build tiếp tục để các bước khác có thể chạy, nhưng sẽ cảnh báo.
-        echo "CANH BAO: Khong the cau hinh Microsoft ODBC repository. Cac buoc cai dat driver ODBC co the se that bai." ; \
+        echo "LOI NGHIEM TRONG: Khong tim thay package config cua Microsoft cho phien ban Debian $DEBIAN_VERSION_MAJOR. Kiem tra URL va phien ban Debian duoc ho tro." ; \
+        exit 1; \
     else \
+        echo "Dang tai packages-microsoft-prod.deb cho Debian $DEBIAN_VERSION_MAJOR..." && \
         curl -L -o packages-microsoft-prod.deb "https://packages.microsoft.com/config/debian/${DEBIAN_VERSION_MAJOR}/packages-microsoft-prod.deb" && \
+        echo "Dang cai dat packages-microsoft-prod.deb..." && \
         dpkg -i packages-microsoft-prod.deb && \
+        echo "Da xoa packages-microsoft-prod.deb." && \
         rm packages-microsoft-prod.deb ; \
     fi
-RUN echo "BUOC 3 HOAN TAT: Microsoft repository da duoc cau hinh (hoac da bo qua neu khong tuong thich)."
+RUN echo "BUOC 3 HOAN TAT: Microsoft repository da duoc cau hinh."
 
-# Bước 4: Cập nhật apt-get lại (RẤT QUAN TRỌNG sau khi thêm repo mới) và cài đặt Microsoft ODBC driver & tools
-# Bước này có thể thất bại nếu Bước 3 không cấu hình được repo của Microsoft.
-RUN apt-get update && \
-    # ACCEPT_EULA=Y là cần thiết để tự động chấp nhận thỏa thuận người dùng của Microsoft
+# Bước 4: Cập nhật apt-get lại và cài đặt Microsoft ODBC driver & tools
+RUN set -e && \
+    apt-get update && \
+    echo "Dang tien hanh cai dat msodbcsql17 va mssql-tools17..." && \
     ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
-        msodbcsql17 \
-        mssql-tools17 \
-    || echo "CANH BAO: Cai dat msodbcsql17 hoac mssql-tools17 that bai. Co the do Microsoft repository khong duoc them dung cach o buoc truoc, hoac goi khong co san cho phien ban OS nay." \
-    && rm -rf /var/lib/apt/lists/*
-RUN echo "BUOC 4 HOAN TAT: Microsoft ODBC Driver (msodbcsql17) va tools da duoc cai dat (hoac da co canh bao neu that bai)."
+        msodbcsql18 \
+        mssql-tools18 && \
+    echo "Da cai dat xong msodbcsql18 va mssql-tools18." && \
+    rm -rf /var/lib/apt/lists/*
+RUN echo "BUOC 4 HOAN TAT: Microsoft ODBC Driver (msodbcsql18) va tools da duoc cai dat."
 
 # >>> THÊM BƯỚC DEBUG NÀY VÀO NẾU CHƯA CÓ <<<
 RUN echo "--- Thong tin Debug Driver ODBC ---" && \
