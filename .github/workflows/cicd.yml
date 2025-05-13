@@ -1,0 +1,56 @@
+name: CI/CD Docker Build and Deploy on Self-Hosted Runner (Poetry)
+
+on:
+  push:
+    branches:
+      - main # Hoặc branch chính của bạn
+
+jobs:
+  build-and-deploy:
+    # Đảm bảo labels này khớp với self-hosted runner của bạn!
+    runs-on: [self-hosted, windows] # Thêm các label khác nếu cần
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Define Docker image name and tags
+        id: docker_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build Docker image (using updated Dockerfile with Poetry)
+        run: |
+          docker build -t ${{ steps.docker_meta.outputs.tags }} .
+        # Dockerfile của bạn giờ đã hỗ trợ Poetry và Python 3.13
+
+      - name: Stop and Remove existing container (if any)
+        run: |
+          docker stop ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}-container -ErrorAction SilentlyContinue
+          docker rm ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}-container -ErrorAction SilentlyContinue
+
+      - name: Run new Docker container
+        run: |
+          docker run -d `
+            --name ${{ secrets.PROJECT_NAME || 'myfastapiapp-poetry' }}-container `
+            -p 6020:8000 `
+            --restart always `
+            -e PROJECT_NAME="${{ secrets.PROJECT_NAME }}" `
+            -e PROJECT_VERSION="${{ steps.docker_meta.outputs.version }}" `
+            -e LOG_LEVEL="${{ secrets.LOG_LEVEL }}" `
+            -e DB_SERVER="${{ secrets.DB_SERVER }}" `
+            -e DB_PORT="${{ secrets.DB_PORT }}" `
+            -e DB_USER="${{ secrets.DB_USER }}" `
+            -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}" `
+            -e DB_NAME="${{ secrets.DB_NAME }}" `
+            -e DB_DRIVER="${{ secrets.DB_DRIVER }}" `
+            # Thêm các biến môi trường khác từ secrets nếu cần
+            # Chạy image với tag cụ thể (ví dụ theo SHA) hoặc tag 'latest'
+            ${{ steps.docker_meta.outputs.tags_first_on_new_line }}
